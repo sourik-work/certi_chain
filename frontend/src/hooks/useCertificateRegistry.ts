@@ -44,10 +44,9 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
       if (useSigner && signer) {
         return CertificateRegistry__factory.connect(targetAddress, signer);
       }
-      const activeProvider = provider || fallbackProvider;
-      return CertificateRegistry__factory.connect(targetAddress, activeProvider);
+      return CertificateRegistry__factory.connect(targetAddress, fallbackProvider);
     },
-    [chainId, fallbackProvider, provider, signer]
+    [chainId, fallbackProvider, signer]
   );
 
   const isIssuerAuthorized = useCallback(
@@ -134,30 +133,14 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
     [getContract]
   );
 
-  const getSafeFromBlock = useCallback(
-    async (activeProvider: ethers.Provider): Promise<number> => {
-      const activeChain = chainId || CONFIG.targetChainId;
-      if (activeChain === 11155111) {
-        try {
-          const current = await activeProvider.getBlockNumber();
-          return Math.max(11774000, current - 45000);
-        } catch {
-          return 11774000;
-        }
-      }
-      return 0;
-    },
-    [chainId]
-  );
-
   const queryRecipientCertificates = useCallback(
     async (recipientAddress: string): Promise<IssuedCertificateRecord[]> => {
       if (!recipientAddress || !ethers.isAddress(recipientAddress)) {
         return [];
       }
+      const fromBlock = (chainId === 11155111 || CONFIG.targetChainId === 11155111) ? 11774000 : 0;
       try {
         const contract = getContract(false);
-        const fromBlock = await getSafeFromBlock(provider || fallbackProvider);
         // Filter on CertificateIssued with indexed recipient parameter (Decision 2.5 / FR-3.5)
         const filter = contract.filters.CertificateIssued(undefined, undefined, recipientAddress);
         const events = await contract.queryFilter(filter, fromBlock, 'latest');
@@ -171,18 +154,35 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
           timestamp: ev.args.timestamp,
         }));
       } catch (err) {
-        console.error('Failed to query recipient certificates:', err);
+        console.warn('Failed to query recipient certificates via fallbackProvider, trying wallet provider:', err);
+        if (provider) {
+          try {
+            const contract = CertificateRegistry__factory.connect(getRegistryAddress(chainId), provider);
+            const filter = contract.filters.CertificateIssued(undefined, undefined, recipientAddress);
+            const events = await contract.queryFilter(filter, fromBlock, 'latest');
+            return events.map((ev) => ({
+              certId: ev.args.certId,
+              issuer: ev.args.issuer,
+              recipient: ev.args.recipient,
+              proofHash: ev.args.proofHash,
+              metadataUrl: ev.args.metadataUrl,
+              timestamp: ev.args.timestamp,
+            }));
+          } catch (pErr) {
+            console.error('Wallet provider queryRecipientCertificates failed:', pErr);
+          }
+        }
         return [];
       }
     },
-    [fallbackProvider, getContract, getSafeFromBlock, provider]
+    [chainId, getContract, provider]
   );
 
   const queryAllIssuedCertificates = useCallback(
     async (issuerAddress?: string): Promise<IssuedCertificateRecord[]> => {
+      const fromBlock = (chainId === 11155111 || CONFIG.targetChainId === 11155111) ? 11774000 : 0;
       try {
         const contract = getContract(false);
-        const fromBlock = await getSafeFromBlock(provider || fallbackProvider);
         const filter = issuerAddress
           ? contract.filters.CertificateIssued(undefined, issuerAddress, undefined)
           : contract.filters.CertificateIssued();
@@ -197,11 +197,30 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
           timestamp: ev.args.timestamp,
         }));
       } catch (err) {
-        console.error('Failed to query issued certificates:', err);
+        console.warn('Failed to query issued certificates via fallbackProvider, trying wallet provider:', err);
+        if (provider) {
+          try {
+            const contract = CertificateRegistry__factory.connect(getRegistryAddress(chainId), provider);
+            const filter = issuerAddress
+              ? contract.filters.CertificateIssued(undefined, issuerAddress, undefined)
+              : contract.filters.CertificateIssued();
+            const events = await contract.queryFilter(filter, fromBlock, 'latest');
+            return events.map((ev) => ({
+              certId: ev.args.certId,
+              issuer: ev.args.issuer,
+              recipient: ev.args.recipient,
+              proofHash: ev.args.proofHash,
+              metadataUrl: ev.args.metadataUrl,
+              timestamp: ev.args.timestamp,
+            }));
+          } catch (pErr) {
+            console.error('Wallet provider queryAllIssuedCertificates failed:', pErr);
+          }
+        }
         return [];
       }
     },
-    [fallbackProvider, getContract, getSafeFromBlock, provider]
+    [chainId, getContract, provider]
   );
 
   return {
