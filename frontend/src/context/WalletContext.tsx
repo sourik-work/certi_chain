@@ -72,7 +72,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const hasInjectedWallet = typeof window !== 'undefined' && !!window.ethereum;
   const isConnected = !!account && !!signer;
-  const isCorrectNetwork = chainId === CONFIG.targetChainId;
+  const isCorrectNetwork = chainId === 11155111 || chainId === 31337 || chainId === CONFIG.targetChainId;
 
   const updateWalletState = useCallback(async (ethProvider: ethers.BrowserProvider) => {
     try {
