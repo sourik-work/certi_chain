@@ -34,7 +34,7 @@ export async function pinMetadataToIpfs(
       console.log(`[pinata] Attempt ${attempt}/${maxAttempts} — posting to /api/pinJson...`);
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
 
       const response = await fetch('/api/pinJson', {
         method: 'POST',
