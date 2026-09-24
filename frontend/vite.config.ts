@@ -1,10 +1,10 @@
-import { defineConfig, Plugin } from "vite";
+import { defineConfig, loadEnv, Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import crypto from "crypto";
 
 const localIpfsStore = new Map<string, any>();
 
-function devIpfsPlugin(): Plugin {
+function devIpfsPlugin(jwtToken?: string): Plugin {
   return {
     name: "dev-ipfs-proxy",
     configureServer(server) {
@@ -17,30 +17,43 @@ function devIpfsPlugin(): Plugin {
           req.on("end", async () => {
             try {
               const jsonContent = JSON.parse(body);
-              const pinataJwt = process.env.PINATA_JWT;
+              const pinataJwt = jwtToken || process.env.PINATA_JWT;
 
-              if (pinataJwt) {
-                // Proxy to real Pinata if JWT is provided
-                const pinataRes = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${pinataJwt}`,
-                  },
-                  body: JSON.stringify({
-                    pinataContent: jsonContent,
-                    pinataMetadata: {
-                      name: `certichain-${jsonContent.certificateTitle || "credential"}-${Date.now()}`,
+              if (pinataJwt && pinataJwt.trim()) {
+                try {
+                  const controller = new AbortController();
+                  const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+                  const pinataRes = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      Authorization: `Bearer ${pinataJwt.trim()}`,
                     },
-                  }),
-                });
-                const data = await pinataRes.json();
-                res.writeHead(pinataRes.status, { "Content-Type": "application/json" });
-                res.end(JSON.stringify(data));
-                return;
+                    body: JSON.stringify({
+                      pinataContent: jsonContent,
+                      pinataMetadata: {
+                        name: `certichain-${jsonContent.certificateTitle || "credential"}-${Date.now()}`,
+                      },
+                    }),
+                    signal: controller.signal,
+                  });
+                  clearTimeout(timeoutId);
+
+                  if (pinataRes.ok) {
+                    const data = await pinataRes.json();
+                    res.writeHead(200, { "Content-Type": "application/json" });
+                    res.end(JSON.stringify(data));
+                    return;
+                  } else {
+                    console.warn(`Pinata responded with status ${pinataRes.status}, falling back to local store.`);
+                  }
+                } catch (pinErr) {
+                  console.warn("Pinata upload attempt failed or timed out, falling back to local simulation:", pinErr);
+                }
               }
 
-              // Local dev simulation: generate deterministic Qm hash and store in memory
+              // Local dev simulation fallback: generate deterministic Qm hash and store in memory
               const hash = crypto.createHash("sha256").update(JSON.stringify(jsonContent)).digest("hex");
               const simulatedCid = `Qm${hash.slice(0, 44)}`;
               localIpfsStore.set(simulatedCid, jsonContent);
@@ -78,16 +91,21 @@ function devIpfsPlugin(): Plugin {
   };
 }
 
-export default defineConfig({
-  plugins: [react(), devIpfsPlugin()],
-  server: {
-    port: 5173,
-    host: true,
-  },
-  test: {
-    globals: true,
-    environment: "jsdom",
-    setupFiles: "./src/test/setup.ts",
-  },
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
+  const jwt = env.PINATA_JWT || process.env.PINATA_JWT;
+
+  return {
+    plugins: [react(), devIpfsPlugin(jwt)],
+    server: {
+      port: 5173,
+      host: true,
+    },
+    test: {
+      globals: true,
+      environment: "jsdom",
+      setupFiles: "./src/test/setup.ts",
+    },
+  };
 });
 

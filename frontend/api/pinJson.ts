@@ -1,7 +1,12 @@
 /**
  * Serverless function proxy for Pinata IPFS pinning.
  * Ensures PINATA_JWT is never shipped in client bundles (NFR-1).
+ * Supports both Vercel Edge Runtime and Node.js Serverless runtime.
  */
+export const config = {
+  runtime: 'edge',
+};
+
 export default async function handler(req: Request): Promise<Response> {
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), {
@@ -11,7 +16,7 @@ export default async function handler(req: Request): Promise<Response> {
   }
 
   const pinataJwt = process.env.PINATA_JWT;
-  if (!pinataJwt) {
+  if (!pinataJwt || !pinataJwt.trim()) {
     return new Response(
       JSON.stringify({
         error: 'PINATA_JWT server environment variable is not configured',
@@ -23,13 +28,16 @@ export default async function handler(req: Request): Promise<Response> {
   try {
     const body = await req.json();
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+
     const pinataResponse = await fetch(
       'https://api.pinata.cloud/pinning/pinJSONToIPFS',
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${pinataJwt}`,
+          Authorization: `Bearer ${pinataJwt.trim()}`,
         },
         body: JSON.stringify({
           pinataContent: body,
@@ -37,8 +45,10 @@ export default async function handler(req: Request): Promise<Response> {
             name: `certichain-${body.certificateTitle || 'credential'}-${Date.now()}`,
           },
         }),
+        signal: controller.signal,
       }
     );
+    clearTimeout(timeoutId);
 
     const data = await pinataResponse.json();
     if (!pinataResponse.ok) {
