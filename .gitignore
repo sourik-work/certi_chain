@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Environment and Secrets
+.env
+.env.local
+.env.*.local
+*.env
+
+# Hardhat & Solidity outputs
+cache/
+artifacts/
+typechain-types/
+contracts/cache/
+contracts/artifacts/
+contracts/typechain-types/
+
+# Frontend Vite & Production outputs
+dist/
+dist-ssr/
+frontend/dist/
+frontend/dist-ssr/
+
+# Coverage & Testing
+coverage/
+coverage.json
+*.lcov
+.nyc_output
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Editor & OS files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
+
