@@ -33,11 +33,8 @@ export const CONFIG: AppConfig = {
 };
 
 export function getRegistryAddress(currentChainId?: number | null): string {
-  if (currentChainId === 11155111) {
-    return '0xeCBA3CDA5f34859744ACe79B7BA79B71cC29580D';
-  }
   if (currentChainId === 31337) {
     return '0x5FbDB2315678afecb367f032d93F642f64180aa3';
   }
-  return CONFIG.registryAddress;
+  return '0xeCBA3CDA5f34859744ACe79B7BA79B71cC29580D';
 }
