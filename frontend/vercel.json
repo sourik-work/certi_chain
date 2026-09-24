@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/pinJson",
+      "destination": "/api/pinJson"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
