@@ -4,12 +4,8 @@
   "framework": "vite",
   "rewrites": [
     {
-      "source": "/api/pinJson",
-      "destination": "/frontend/api/pinJson"
-    },
-    {
-      "source": "/(.*)",
-      "destination": "/frontend/dist/index.html"
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
     }
   ]
 }

@@ -16,12 +16,12 @@ export interface PinataPinResult {
 }
 
 /**
- * Pins canonical certificate JSON to IPFS with exponential backoff retry (FR-2.2, FR-2.5).
+ * Pins canonical certificate JSON to IPFS with retry (FR-2.2, FR-2.5).
  * Calls serverless /api/pinJson route to keep PINATA_JWT safe.
  */
 export async function pinMetadataToIpfs(
   metadata: CertificateMetadata,
-  maxAttempts = 3,
+  maxAttempts = 2,
   initialDelay = 1000
 ): Promise<PinataPinResult> {
   let attempt = 0;
@@ -30,8 +30,10 @@ export async function pinMetadataToIpfs(
   while (attempt < maxAttempts) {
     attempt++;
     try {
+      console.log(`[pinata] Attempt ${attempt}/${maxAttempts} — posting to /api/pinJson...`);
+
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
 
       const response = await fetch('/api/pinJson', {
         method: 'POST',
@@ -45,6 +47,7 @@ export async function pinMetadataToIpfs(
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: 'Pinning failed' }));
+        console.error(`[pinata] Server responded HTTP ${response.status}:`, errorData);
         throw new Error(errorData.error || `HTTP ${response.status}: Failed to pin JSON to IPFS`);
       }
 
@@ -56,6 +59,7 @@ export async function pinMetadataToIpfs(
       }
 
       const metadataUrl = constructGatewayUrl(ipfsHash);
+      console.log(`[pinata] Pinned successfully — CID: ${ipfsHash}`);
 
       return {
         ipfsHash,
@@ -64,9 +68,17 @@ export async function pinMetadataToIpfs(
         metadataUrl,
       };
     } catch (err: unknown) {
-      console.warn(`Pinning attempt ${attempt} failed:`, err);
+      const isAbort = err instanceof Error && err.name === 'AbortError';
+      console.warn(
+        `[pinata] Attempt ${attempt} failed:`,
+        isAbort ? 'Request timed out' : err
+      );
       if (attempt >= maxAttempts) {
-        const message = err instanceof Error ? err.message : 'Unknown error during IPFS pinning';
+        const message = isAbort
+          ? 'IPFS pinning request timed out. Please try again.'
+          : err instanceof Error
+            ? err.message
+            : 'Unknown error during IPFS pinning';
         throw new Error(`Failed to pin metadata to IPFS after ${maxAttempts} attempts: ${message}`);
       }
       // Wait with exponential backoff

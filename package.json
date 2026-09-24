@@ -14,5 +14,8 @@
     "frontend:dev": "npm --workspace=frontend run dev",
     "frontend:build": "npm --workspace=frontend run build",
     "frontend:test": "npm --workspace=frontend run test"
+  },
+  "devDependencies": {
+    "@vercel/node": "^15.0.0"
   }
 }
