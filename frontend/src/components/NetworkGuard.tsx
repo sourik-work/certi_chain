@@ -6,7 +6,9 @@ import { AlertTriangle, ArrowRightLeft } from 'lucide-react';
 export const NetworkGuard: React.FC = () => {
   const { isConnected, isCorrectNetwork, chainId, switchNetwork } = useWallet();
 
-  if (!isConnected || isCorrectNetwork) {
+  const isSupportedNetwork = chainId === 11155111 || chainId === 31337 || isCorrectNetwork;
+
+  if (!isConnected || isSupportedNetwork) {
     return null;
   }
 

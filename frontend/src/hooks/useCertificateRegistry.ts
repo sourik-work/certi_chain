@@ -9,7 +9,7 @@
 import { useCallback, useMemo } from 'react';
 import { ethers } from 'ethers';
 import { useWallet } from './useWallet';
-import { CONFIG } from '../config';
+import { CONFIG, getRegistryAddress } from '../config';
 import { CertificateRegistry, CertificateRegistry__factory } from '../contracts';
 import { OnChainCertificate, IssuedCertificateRecord } from '../types/certificate';
 import { normalizeError } from '../types/error';
@@ -31,7 +31,7 @@ export interface UseCertificateRegistryReturn {
 }
 
 export function useCertificateRegistry(): UseCertificateRegistryReturn {
-  const { provider, signer } = useWallet();
+  const { provider, signer, chainId } = useWallet();
 
   // Readonly fallback provider for public walletless queries
   const fallbackProvider = useMemo(() => {
@@ -40,13 +40,14 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
 
   const getContract = useCallback(
     (useSigner = false): CertificateRegistry => {
+      const targetAddress = getRegistryAddress(chainId);
       if (useSigner && signer) {
-        return CertificateRegistry__factory.connect(CONFIG.registryAddress, signer);
+        return CertificateRegistry__factory.connect(targetAddress, signer);
       }
       const activeProvider = provider || fallbackProvider;
-      return CertificateRegistry__factory.connect(CONFIG.registryAddress, activeProvider);
+      return CertificateRegistry__factory.connect(targetAddress, activeProvider);
     },
-    [fallbackProvider, provider, signer]
+    [chainId, fallbackProvider, provider, signer]
   );
 
   const isIssuerAuthorized = useCallback(

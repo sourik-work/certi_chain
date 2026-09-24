@@ -11,7 +11,7 @@ interface NavbarProps {
 }
 
 export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab, isIssuer }) => {
-  const { account, isConnected, isConnecting, disconnect, isCorrectNetwork, isDevAccount } = useWallet();
+  const { account, isConnected, isConnecting, disconnect, isCorrectNetwork, isDevAccount, chainId } = useWallet();
   const [copied, setCopied] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [walletModalOpen, setWalletModalOpen] = useState(false);
@@ -28,6 +28,18 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab, isIssuer
   const truncatedAccount = account
     ? `${account.slice(0, 6)}...${account.slice(-4)}`
     : '';
+
+  const activeChainLabel = isConnected && chainId
+    ? chainId === 11155111
+      ? 'Sepolia Testnet'
+      : chainId === 31337
+      ? 'Hardhat Localhost'
+      : `Chain ${chainId}`
+    : CONFIG.targetChainName;
+
+  const isNetworkValid = isConnected
+    ? chainId === 11155111 || chainId === 31337 || isCorrectNetwork
+    : false;
 
   return (
     <header className="border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-xl sticky top-0 z-40">
@@ -93,13 +105,13 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, onSelectTab, isIssuer
             <span
               className={`w-2 h-2 rounded-full ${
                 isConnected
-                  ? isCorrectNetwork
+                  ? isNetworkValid
                     ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]'
                     : 'bg-amber-400'
                   : 'bg-slate-600'
               }`}
             />
-            <span>{CONFIG.targetChainName}</span>
+            <span>{activeChainLabel}</span>
           </div>
 
           {/* Connect Button or Account Menu */}
