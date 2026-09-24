@@ -128,6 +128,21 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
     [getContract]
   );
 
+  const getSafeFromBlock = useCallback(
+    async (activeProvider: ethers.Provider): Promise<number> => {
+      if (chainId === 11155111) {
+        try {
+          const current = await activeProvider.getBlockNumber();
+          return Math.max(11774000, current - 45000);
+        } catch {
+          return 11774000;
+        }
+      }
+      return 0;
+    },
+    [chainId]
+  );
+
   const queryRecipientCertificates = useCallback(
     async (recipientAddress: string): Promise<IssuedCertificateRecord[]> => {
       if (!recipientAddress || !ethers.isAddress(recipientAddress)) {
@@ -135,9 +150,10 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
       }
       try {
         const contract = getContract(false);
+        const fromBlock = await getSafeFromBlock(provider || fallbackProvider);
         // Filter on CertificateIssued with indexed recipient parameter (Decision 2.5 / FR-3.5)
         const filter = contract.filters.CertificateIssued(undefined, undefined, recipientAddress);
-        const events = await contract.queryFilter(filter, 0, 'latest');
+        const events = await contract.queryFilter(filter, fromBlock, 'latest');
 
         return events.map((ev) => ({
           certId: ev.args.certId,
@@ -152,18 +168,19 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
         return [];
       }
     },
-    [getContract]
+    [fallbackProvider, getContract, getSafeFromBlock, provider]
   );
 
   const queryAllIssuedCertificates = useCallback(
     async (issuerAddress?: string): Promise<IssuedCertificateRecord[]> => {
       try {
         const contract = getContract(false);
+        const fromBlock = await getSafeFromBlock(provider || fallbackProvider);
         const filter = issuerAddress
           ? contract.filters.CertificateIssued(undefined, issuerAddress, undefined)
           : contract.filters.CertificateIssued();
 
-        const events = await contract.queryFilter(filter, 0, 'latest');
+        const events = await contract.queryFilter(filter, fromBlock, 'latest');
         return events.map((ev) => ({
           certId: ev.args.certId,
           issuer: ev.args.issuer,
@@ -177,7 +194,7 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
         return [];
       }
     },
-    [getContract]
+    [fallbackProvider, getContract, getSafeFromBlock, provider]
   );
 
   return {
