@@ -136,7 +136,8 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
 
   const getSafeFromBlock = useCallback(
     async (activeProvider: ethers.Provider): Promise<number> => {
-      if (chainId === 11155111) {
+      const activeChain = chainId || CONFIG.targetChainId;
+      if (activeChain === 11155111) {
         try {
           const current = await activeProvider.getBlockNumber();
           return Math.max(11774000, current - 45000);

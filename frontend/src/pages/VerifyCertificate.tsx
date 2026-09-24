@@ -12,7 +12,7 @@ interface VerifyCertificateProps {
 }
 
 export const VerifyCertificate: React.FC<VerifyCertificateProps> = ({ initialCertId }) => {
-  const { account } = useWallet();
+  const { account, chainId } = useWallet();
   const { verifyCertificate, isIssuerAuthorized, revokeCertificate, queryAllIssuedCertificates } = useCertificateRegistry();
   const { showToast } = useToast();
 
@@ -42,7 +42,7 @@ export const VerifyCertificate: React.FC<VerifyCertificateProps> = ({ initialCer
 
   useEffect(() => {
     loadRecentCertificates();
-  }, [loadRecentCertificates]);
+  }, [loadRecentCertificates, chainId]);
 
   const performVerification = useCallback(
     async (rawQuery: string) => {
