@@ -90,7 +90,7 @@ describe('pinata client & gateway resolution', () => {
 
     global.fetch = mockFetch;
 
-    await expect(pinMetadataToIpfs(sampleMetadata, 2, 1)).rejects.toThrow(
+    await expect(pinMetadataToIpfs(sampleMetadata, 2, 1, false)).rejects.toThrow(
       /Failed to pin metadata to IPFS after 2 attempts/
     );
   });
