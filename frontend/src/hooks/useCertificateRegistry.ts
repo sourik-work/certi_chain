@@ -1,9 +1,13 @@
 /**
  * @file useCertificateRegistry.ts
- * @summary Single Responsibility: Encapsulates all ethers.js contract interactions for CertificateRegistry.sol.
+ * @summary Custom React Hook encapsulating all Ethers.js smart contract interactions for CertificateRegistry.sol.
  *
- * Adheres to CONVENTIONS.md: components stay presentational and call this hook.
- * Uses generated TypeChain bindings and normalizes errors to AppError.
+ * Design Architecture:
+ * - Keeps React UI components 100% presentational (CONVENTIONS.md).
+ * - Utilizes TypeChain-generated bindings (`CertificateRegistry__factory`).
+ * - Employs a fallback JsonRpcProvider for walletless public queries (public ledger & verifier).
+ * - Switches dynamically to signer-backed contract instances for state-changing transactions (issuance & revocation).
+ * - Implements optimized block range querying for Sepolia testnet to avoid RPC timeouts.
  */
 
 import { useCallback, useMemo } from 'react';
@@ -14,30 +18,43 @@ import { CertificateRegistry, CertificateRegistry__factory } from '../contracts'
 import { OnChainCertificate, IssuedCertificateRecord } from '../types/certificate';
 import { normalizeError } from '../types/error';
 
+/**
+ * Return interface for the useCertificateRegistry hook.
+ */
 export interface UseCertificateRegistryReturn {
+  /** Checks if a given Ethereum address is authorized to issue credentials */
   isIssuerAuthorized: (address: string) => Promise<boolean>;
+  /** Submits an on-chain transaction to register a new certificate */
   issueCertificate: (
     proofHash: string,
     metadataUrl: string,
     recipient: string
   ) => Promise<{ txHash: string; wait: (confirmations?: number) => Promise<ethers.ContractTransactionReceipt | null> }>;
+  /** Submits an on-chain transaction to revoke an existing certificate */
   revokeCertificate: (
     certId: string,
     reason: string
   ) => Promise<{ txHash: string; wait: (confirmations?: number) => Promise<ethers.ContractTransactionReceipt | null> }>;
+  /** Reads the on-chain certificate record by its certId (proofHash) */
   verifyCertificate: (certId: string) => Promise<OnChainCertificate>;
+  /** Queries all CertificateIssued events for a specific recipient wallet address */
   queryRecipientCertificates: (recipientAddress: string) => Promise<IssuedCertificateRecord[]>;
+  /** Queries all historical CertificateIssued events from the blockchain */
   queryAllIssuedCertificates: (issuerAddress?: string) => Promise<IssuedCertificateRecord[]>;
 }
 
 export function useCertificateRegistry(): UseCertificateRegistryReturn {
   const { provider, signer, chainId } = useWallet();
 
-  // Readonly fallback provider for public walletless queries
+  // Read-only fallback provider for public walletless queries (ensures verification works without connecting a wallet)
   const fallbackProvider = useMemo(() => {
     return new ethers.JsonRpcProvider(CONFIG.rpcUrl);
   }, []);
 
+  /**
+   * Factory function to instantiate the TypeChain CertificateRegistry contract wrapper.
+   * If useSigner is true, connects using the user's active wallet signer for write transactions.
+   */
   const getContract = useCallback(
     (useSigner = false): CertificateRegistry => {
       const targetAddress = getRegistryAddress(chainId);
@@ -49,10 +66,14 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
     [chainId, fallbackProvider, signer]
   );
 
+  /**
+   * Queries the smart contract whitelist mapping `isIssuerAuthorized(address)`.
+   */
   const isIssuerAuthorized = useCallback(
     async (address: string): Promise<boolean> => {
       try {
         if (!ethers.isAddress(address)) return false;
+        // Known deployer and pre-authorized addresses for fast local / testnet response
         if (
           address.toLowerCase() === '0x637e12782f529c659d8bcf3758cedcee92340293' ||
           address.toLowerCase() === '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266'
@@ -69,6 +90,9 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
     [getContract]
   );
 
+  /**
+   * State-mutating method: calls `issueCertificate(bytes32 proofHash, string metadataUrl, address recipient)`.
+   */
   const issueCertificate = useCallback(
     async (proofHash: string, metadataUrl: string, recipient: string) => {
       if (!signer) {
@@ -76,6 +100,7 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
       }
       try {
         const contract = getContract(true);
+        // Default to ZeroAddress if recipient is non-wallet or unspecified
         const recipientAddr = recipient && ethers.isAddress(recipient) ? recipient : ethers.ZeroAddress;
         
         const tx = await contract.issueCertificate(proofHash, metadataUrl, recipientAddr);
@@ -91,6 +116,9 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
     [getContract, signer]
   );
 
+  /**
+   * State-mutating method: calls `revokeCertificate(bytes32 certId, string reason)`.
+   */
   const revokeCertificate = useCallback(
     async (certId: string, reason: string) => {
       if (!signer) {
@@ -111,6 +139,9 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
     [getContract, signer]
   );
 
+  /**
+   * Read-only method: calls `verifyCertificate(bytes32 certId)` on-chain.
+   */
   const verifyCertificate = useCallback(
     async (certId: string): Promise<OnChainCertificate> => {
       try {
@@ -133,15 +164,18 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
     [getContract]
   );
 
+  /**
+   * Queries historical CertificateIssued logs filtered by recipient address.
+   */
   const queryRecipientCertificates = useCallback(
     async (recipientAddress: string): Promise<IssuedCertificateRecord[]> => {
       if (!recipientAddress || !ethers.isAddress(recipientAddress)) {
         return [];
       }
+      // On Sepolia, use safe starting block to stay within public RPC limits
       const fromBlock = (chainId === 11155111 || CONFIG.targetChainId === 11155111) ? 11774000 : 0;
       try {
         const contract = getContract(false);
-        // Filter on CertificateIssued with indexed recipient parameter (Decision 2.5 / FR-3.5)
         const filter = contract.filters.CertificateIssued(undefined, undefined, recipientAddress);
         const events = await contract.queryFilter(filter, fromBlock, 'latest');
 
@@ -178,6 +212,9 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
     [chainId, getContract, provider]
   );
 
+  /**
+   * Queries all CertificateIssued events across the entire ledger.
+   */
   const queryAllIssuedCertificates = useCallback(
     async (issuerAddress?: string): Promise<IssuedCertificateRecord[]> => {
       const fromBlock = (chainId === 11155111 || CONFIG.targetChainId === 11155111) ? 11774000 : 0;
@@ -232,3 +269,4 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
     queryAllIssuedCertificates,
   };
 }
+

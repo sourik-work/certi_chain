@@ -1,23 +1,38 @@
 /**
  * @file pinata.ts
- * @summary Single Responsibility: Manages IPFS JSON pinning via serverless proxy and gateway resolution.
+ * @summary Decentralized Storage Layer: Manages IPFS JSON pinning via serverless proxy and resilient gateway resolution.
  *
- * Implements exponential backoff retry (FR-2.5) and gateway fallbacks (FR-2.3).
+ * Security & Reliability Highlights:
+ * 1. Zero Secret Exposure: Routes all pinning requests through the serverless `/api/pinJson` backend so `PINATA_JWT` never touches browser code.
+ * 2. Exponential Backoff Retry: Retries failed network requests with increasing delay intervals.
+ * 3. Multi-Gateway Fallback: Queries primary Pinata gateway first, falling back to public `ipfs.io` if rate-limited.
+ * 4. Deterministic Simulated Fallback: Allows testing and smooth offline workflow when backend proxy is in cold start.
  */
 
 import { CONFIG } from '../config';
 import { CertificateMetadata } from '../types/certificate';
 
+/**
+ * Result structure returned after successfully pinning metadata to IPFS.
+ */
 export interface PinataPinResult {
-  readonly ipfsHash: string; // CID
+  /** IPFS Content Identifier (CID v0 or v1 hash) */
+  readonly ipfsHash: string;
+  /** Size of pinned payload in bytes */
   readonly pinSize: number;
+  /** Timestamp of successful pin */
   readonly timestamp: string;
+  /** Direct HTTP URL through the configured gateway */
   readonly metadataUrl: string;
 }
 
 /**
- * Pins canonical certificate JSON to IPFS with retry (FR-2.2, FR-2.5).
- * Calls serverless /api/pinJson route to keep PINATA_JWT safe.
+ * Pins canonical certificate JSON to IPFS with exponential backoff retry.
+ * @param metadata - Complete structured certificate metadata.
+ * @param maxAttempts - Number of total retry attempts before failing (default 2).
+ * @param initialDelay - Initial wait time in milliseconds (default 1000ms).
+ * @param allowSimulatedFallback - Fallback to local CID simulation if remote pin fails.
+ * @returns PinataPinResult containing the IPFS CID and HTTP gateway URL.
  */
 export async function pinMetadataToIpfs(
   metadata: CertificateMetadata,
@@ -33,9 +48,11 @@ export async function pinMetadataToIpfs(
     try {
       console.log(`[pinata] Attempt ${attempt}/${maxAttempts} — posting to /api/pinJson...`);
 
+      // 4-second timeout to prevent UI hang
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 4000);
 
+      // Post payload to serverless endpoint
       const response = await fetch('/api/pinJson', {
         method: 'POST',
         headers: {
@@ -74,11 +91,14 @@ export async function pinMetadataToIpfs(
         `[pinata] Attempt ${attempt} failed:`,
         isAbort ? 'Request timed out' : err
       );
+
+      // When retries are exhausted, use simulated fallback if enabled
       if (attempt >= maxAttempts) {
         if (allowSimulatedFallback) {
           console.warn('[pinata] Serverless pinJson failed or unreachable; generating simulated CID fallback for seamless flow.');
           const raw = JSON.stringify(metadata);
-          // In browser, create a deterministic pseudo CID
+          
+          // Generate deterministic pseudo CID from content bytes
           let hashStr = '';
           for (let i = 0; i < raw.length; i++) {
             hashStr += raw.charCodeAt(i).toString(16);
@@ -99,7 +119,8 @@ export async function pinMetadataToIpfs(
             : 'Unknown error during IPFS pinning';
         throw new Error(`Failed to pin metadata to IPFS after ${maxAttempts} attempts: ${message}`);
       }
-      // Wait with exponential backoff
+
+      // Wait with exponential backoff before the next attempt
       await new Promise((resolve) => setTimeout(resolve, delay));
       delay *= 2;
     }
@@ -109,7 +130,10 @@ export async function pinMetadataToIpfs(
 }
 
 /**
- * Constructs an IPFS gateway URL from a CID or ipfs:// URI (FR-2.3).
+ * Constructs a fully qualified HTTPS gateway URL from a raw CID or ipfs:// URI.
+ * @param cidOrUri - Raw CID hash (Qm...) or ipfs:// URI.
+ * @param useFallback - Whether to use the public fallback gateway instead of primary Pinata gateway.
+ * @returns Direct HTTP URL.
  */
 export function constructGatewayUrl(cidOrUri: string, useFallback = false): string {
   const cid = cidOrUri.replace('ipfs://', '').replace(/^ipfs\//, '');
@@ -119,7 +143,9 @@ export function constructGatewayUrl(cidOrUri: string, useFallback = false): stri
 }
 
 /**
- * Fetches JSON metadata from IPFS with fallback gateway support (FR-4.2).
+ * Fetches JSON metadata from IPFS with multi-gateway fallback resolution.
+ * @param metadataUrlOrCid - IPFS CID or gateway HTTP URL.
+ * @returns Parsed CertificateMetadata object.
  */
 export async function fetchMetadataFromIpfs(metadataUrlOrCid: string): Promise<CertificateMetadata> {
   const cid = metadataUrlOrCid.startsWith('http')
@@ -129,30 +155,32 @@ export async function fetchMetadataFromIpfs(metadataUrlOrCid: string): Promise<C
   const primaryUrl = constructGatewayUrl(cid, false);
   const fallbackUrl = constructGatewayUrl(cid, true);
 
+  // Strategy 1: Try Primary Gateway (Pinata dedicated/public)
   try {
     const response = await fetch(primaryUrl);
     if (!response.ok) throw new Error(`Primary gateway HTTP ${response.status}`);
     return (await response.json()) as CertificateMetadata;
   } catch (primaryErr) {
+    // Strategy 2: Try Secondary Gateway (ipfs.io)
     try {
       const fallbackResponse = await fetch(fallbackUrl);
       if (fallbackResponse.ok) {
         return (await fallbackResponse.json()) as CertificateMetadata;
       }
     } catch {
-      // Fall through to local dev middleware
+      // Strategy 3: Try Local Vite dev middleware route (/ipfs/:cid)
     }
 
-    // Try local dev server middleware route (/ipfs/:cid)
     try {
       const localResponse = await fetch(`/ipfs/${cid}`);
       if (localResponse.ok) {
         return (await localResponse.json()) as CertificateMetadata;
       }
     } catch {
-      // Ignore
+      // Handled in final error throw
     }
 
     throw new Error(`Unable to fetch IPFS metadata for CID ${cid} from gateways or local store.`);
   }
 }
+

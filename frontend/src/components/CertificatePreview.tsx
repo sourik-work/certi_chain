@@ -1,19 +1,42 @@
+/**
+ * @file CertificatePreview.tsx
+ * @summary Unified, High-Fidelity Certificate Visual Component.
+ *
+ * Design Guarantees (Single Source of Truth):
+ * - Reused identically in Live Form Editor, Recipient Portal, Verifier View, and PDF/PNG Export.
+ * - Displays verifiable metadata: Title, Recipient Name, Issuer Details, Dates, and dynamic Custom Attributes.
+ * - Renders dynamic QR code encoding the deep-link verification URL (`/verify/:certId`).
+ * - Features visual security states: Authorized Trust Badges, or High-Visibility "REVOKED" Watermark.
+ */
+
 import React, { useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { CertificateMetadata } from '../types/certificate';
 import { exportToPdf, exportToPng } from '../lib/export';
 import { ShieldCheck, Award, AlertOctagon, CheckCircle2, FileText, Image as ImageIcon, Loader2 } from 'lucide-react';
 
+/**
+ * Props for CertificatePreview component.
+ */
 interface CertificatePreviewProps {
+  /** Partial or full certificate metadata payload */
   metadata: Partial<CertificateMetadata>;
+  /** 32-byte SHA-256 cryptographic proof hash */
   proofHash?: string;
+  /** Unique on-chain certificate identifier */
   certId?: string;
+  /** Whether this certificate is flagged as revoked on-chain */
   isRevoked?: boolean;
+  /** Human-readable reason why certificate was revoked */
   revocationReason?: string;
+  /** Timestamp when revocation occurred */
   revocationTimestamp?: bigint;
+  /** Whether issuing authority is whitelisted */
   isAuthorizedIssuer?: boolean;
+  /** Toggle whether export buttons (PDF/PNG) should be rendered */
   showExportControls?: boolean;
-  id?: string; // DOM id for export canvas capture
+  /** DOM element ID used by html2canvas during export */
+  id?: string;
 }
 
 export const CertificatePreview: React.FC<CertificatePreviewProps> = ({
@@ -27,14 +50,21 @@ export const CertificatePreview: React.FC<CertificatePreviewProps> = ({
   showExportControls = true,
   id = 'certificate-preview-node',
 }) => {
+  // Local state tracking download progress
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [isExportingPng, setIsExportingPng] = useState(false);
 
+  // Fallback display hash when draft is in progress
   const displayCertId = certId || proofHash || '0x0000000000000000000000000000000000000000000000000000000000000000';
+  
+  // Verification URL embedded inside the certificate's QR code
   const verificationUrl = typeof window !== 'undefined'
     ? `${window.location.origin}/verify/${displayCertId}`
     : `https://certichain.ledger/verify/${displayCertId}`;
 
+  /**
+   * Triggers client-side PDF export
+   */
   const handleExportPdf = async () => {
     setIsExportingPdf(true);
     try {
@@ -50,6 +80,9 @@ export const CertificatePreview: React.FC<CertificatePreviewProps> = ({
     }
   };
 
+  /**
+   * Triggers client-side high-res PNG export
+   */
   const handleExportPng = async () => {
     setIsExportingPng(true);
     try {
@@ -58,6 +91,7 @@ export const CertificatePreview: React.FC<CertificatePreviewProps> = ({
         certificateTitle: metadata.certificateTitle,
         recipientName: metadata.recipientName,
       });
+
     } catch (err) {
       console.error('PNG export failed:', err);
     } finally {

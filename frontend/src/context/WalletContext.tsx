@@ -1,7 +1,21 @@
+/**
+ * @file WalletContext.tsx
+ * @summary Global Web3 Wallet Provider & State Management.
+ * 
+ * Core Features:
+ * 1. Manages connection to MetaMask and EIP-1193 injected Web3 providers.
+ * 2. Provides developer account simulation for instant testing on local Hardhat nodes.
+ * 3. Listens to `accountsChanged` and `chainChanged` events to maintain synchronized UI state.
+ * 4. Provides programmatic network switching (`wallet_switchEthereumChain` / `wallet_addEthereumChain`).
+ */
+
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import { CONFIG } from '../config';
 
+/**
+ * Interface representing standard EIP-1193 Ethereum provider in the window object.
+ */
 interface EthereumProvider {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
   on: (event: string, handler: (...args: unknown[]) => void) => void;
@@ -14,6 +28,9 @@ declare global {
   }
 }
 
+/**
+ * Structure representing a pre-funded local Hardhat developer test account.
+ */
 export interface DevAccountOption {
   label: string;
   address: string;
@@ -21,6 +38,9 @@ export interface DevAccountOption {
   description: string;
 }
 
+/**
+ * Pre-funded accounts available when developing locally against Hardhat node.
+ */
 export const DEV_ACCOUNTS: DevAccountOption[] = [
   {
     label: 'Deployer & Authorized Issuer',
@@ -42,6 +62,9 @@ export const DEV_ACCOUNTS: DevAccountOption[] = [
   },
 ];
 
+/**
+ * Interface defining the reactive state and methods exposed by WalletContext.
+ */
 export interface WalletContextState {
   account: string | null;
   chainId: number | null;
@@ -61,6 +84,9 @@ export interface WalletContextState {
 
 const WalletContext = createContext<WalletContextState | null>(null);
 
+/**
+ * React Context Provider that wraps the entire application to supply wallet state.
+ */
 export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [account, setAccount] = useState<string | null>(null);
   const [chainId, setChainId] = useState<number | null>(null);
@@ -70,10 +96,16 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [isDevAccount, setIsDevAccount] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Checks if user's browser has an injected Web3 provider (like MetaMask extension)
   const hasInjectedWallet = typeof window !== 'undefined' && !!window.ethereum;
   const isConnected = !!account && !!signer;
+  
+  // Checks if the connected network is Sepolia (11155111), Localhost (31337), or targetChainId
   const isCorrectNetwork = chainId === 11155111 || chainId === 31337 || chainId === CONFIG.targetChainId;
 
+  /**
+   * Helper function to refresh active account, signer, and chainId from the provider.
+   */
   const updateWalletState = useCallback(async (ethProvider: ethers.BrowserProvider) => {
     try {
       const network = await ethProvider.getNetwork();
@@ -96,6 +128,9 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, []);
 
+  /**
+   * Requests connection to user's injected browser wallet (MetaMask).
+   */
   const connect = useCallback(async () => {
     if (!window.ethereum) {
       setError('MetaMask or Web3 wallet is not installed. Please install a Web3 wallet extension.');
@@ -110,6 +145,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setProvider(browserProvider);
       setIsDevAccount(false);
 
+      // Prompt user to select account in MetaMask
       await window.ethereum.request({ method: 'eth_requestAccounts' });
       await updateWalletState(browserProvider);
     } catch (err: unknown) {
@@ -121,6 +157,9 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, [updateWalletState]);
 
+  /**
+   * Connects to a simulated local Hardhat test account using JsonRpcProvider.
+   */
   const connectDevAccount = useCallback(
     async (devAddress: string) => {
       setIsConnecting(true);
@@ -148,6 +187,9 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     []
   );
 
+  /**
+   * Resets wallet state and disconnects active session in app memory.
+   */
   const disconnect = useCallback(() => {
     setAccount(null);
     setSigner(null);
@@ -155,6 +197,10 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setError(null);
   }, []);
 
+  /**
+   * Prompts MetaMask to switch to the configured blockchain network (e.g. Sepolia).
+   * If the network is not yet added to the user's wallet, prompts them to add it.
+   */
   const switchNetwork = useCallback(async () => {
     if (!window.ethereum) return;
 
@@ -167,7 +213,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
     } catch (switchError: unknown) {
       const switchErr = switchError as { code?: number };
-      // Chain not added (error code 4902)
+      // Error code 4902 indicates that the network has not been added to MetaMask yet
       if (switchErr.code === 4902) {
         try {
           await window.ethereum.request({
@@ -194,13 +240,16 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, []);
 
+  /**
+   * Effect to initialize provider and subscribe to MetaMask lifecycle events.
+   */
   useEffect(() => {
     if (!window.ethereum) return;
 
     const browserProvider = new ethers.BrowserProvider(window.ethereum as ethers.Eip1193Provider);
     setProvider(browserProvider);
 
-    // Initial check for already connected accounts
+    // Check if user has already granted account access in a previous session
     window.ethereum
       .request({ method: 'eth_accounts' })
       .then((accs) => {
@@ -211,6 +260,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       })
       .catch((err) => console.error('Error fetching initial accounts:', err));
 
+    // Handle user switching accounts in MetaMask
     const handleAccountsChanged = (accs: unknown) => {
       const accounts = accs as string[];
       if (accounts.length === 0) {
@@ -220,6 +270,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
     };
 
+    // Handle user switching blockchain network in MetaMask
     const handleChainChanged = () => {
       updateWalletState(browserProvider);
     };
@@ -227,6 +278,7 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     window.ethereum.on('accountsChanged', handleAccountsChanged);
     window.ethereum.on('chainChanged', handleChainChanged);
 
+    // Clean up event listeners on unmount
     return () => {
       if (window.ethereum?.removeListener) {
         window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
@@ -259,6 +311,9 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   );
 };
 
+/**
+ * Custom React hook to consume the WalletContext state across any component.
+ */
 export const useWallet = (): WalletContextState => {
   const context = useContext(WalletContext);
   if (!context) {
@@ -266,3 +321,4 @@ export const useWallet = (): WalletContextState => {
   }
   return context;
 };
+
