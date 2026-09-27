@@ -1,6 +1,15 @@
+/**
+ * @file verify.ts
+ * @description Script to verify deployed smart contract bytecode and source code on Etherscan/Blockscout.
+ * 
+ * Usage:
+ * CONTRACT_ADDRESS=0x... INITIAL_OWNER=0x... npx hardhat run scripts/verify.ts --network sepolia
+ */
+
 import { run } from "hardhat";
 
 async function main() {
+  // Step 1: Extract environment variables for contract address and constructor arguments
   const contractAddress = process.env.CONTRACT_ADDRESS;
   const initialOwner = process.env.INITIAL_OWNER;
 
@@ -14,6 +23,7 @@ async function main() {
   console.log(`Verifying CertificateRegistry at ${contractAddress} with initialOwner ${initialOwner}...`);
 
   try {
+    // Step 2: Trigger Hardhat Etherscan plugin with matching constructor arguments
     await run("verify:verify", {
       address: contractAddress,
       constructorArguments: [initialOwner],
@@ -29,7 +39,9 @@ async function main() {
   }
 }
 
+// Execute verification and catch unhandled rejections
 main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
+
