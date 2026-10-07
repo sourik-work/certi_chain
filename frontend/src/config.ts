@@ -19,10 +19,11 @@ export const SUPPORTED_CHAINS: Record<number, ChainDetails> = {
     chainId: 11155111,
     name: 'Sepolia Testnet',
     rpcUrls: [
+      'https://1rpc.io/sepolia',
+      'https://sepolia.drpc.org',
       'https://ethereum-sepolia-rpc.publicnode.com',
-      'https://rpc.sepolia.org',
-      'https://rpc2.sepolia.org',
       'https://sepolia.gateway.tenderly.co',
+      'https://rpc.sepolia.org',
     ],
     defaultRegistryAddress: '0xeCBA3CDA5f34859744ACe79B7BA79B71cC29580D',
     blockExplorerUrl: 'https://sepolia.etherscan.io',
