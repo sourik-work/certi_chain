@@ -9,6 +9,7 @@ import { CONFIG } from '../config';
 import { CertificateMetadata } from '../types/certificate';
 import { createPinError, PinError } from './pinErrors';
 import { base64ToUint8Array, sha256Bytes } from './bytes';
+import { getPreloadedMetadata, getPreloadedBinary } from './preloadedIpfs';
 
 export interface PinataPinResult {
   readonly ipfsHash: string; // CID
@@ -385,6 +386,12 @@ export async function fetchMetadataFromIpfs(metadataUrlOrCid: string): Promise<C
     .split('#')[0]
     .trim();
 
+  // 0. Instant resolution from preloaded catalog (for historical & testnet records on Vercel/offline)
+  const preloaded = getPreloadedMetadata(cleanCid) || getPreloadedMetadata(metadataUrlOrCid);
+  if (preloaded) {
+    return preloaded;
+  }
+
   // 1. Exhaustive check in local browser storage (offline & dev simulation persistence)
   if (typeof window !== 'undefined' && window.localStorage) {
     try {
@@ -462,8 +469,9 @@ export async function fetchMetadataFromIpfs(metadataUrlOrCid: string): Promise<C
     // Fall through to public IPFS gateways
   }
 
-  // 3. Resilient Multi-Gateway resolution (Pinata, Cloudflare, ipfs.io, dweb.link)
+  // 3. Resilient Multi-Gateway resolution (Serverless proxy, Pinata, Cloudflare, ipfs.io, dweb.link)
   const gateways = [
+    `/api/ipfs?cid=${cleanCid}`,
     constructGatewayUrl(cleanCid, false),
     `https://cloudflare-ipfs.com/ipfs/${cleanCid}`,
     constructGatewayUrl(cleanCid, true),
@@ -527,7 +535,7 @@ export async function fetchArtifactBytes(
     .split('#')[0]
     .trim();
 
-  // 2. Simulated CIDs (QmSim...) branch: localStorage cache is authoritative
+  // 2. Simulated CIDs (QmSim...) branch: localStorage cache and preloaded binaries are authoritative
   if (cleanCid.startsWith('QmSim')) {
     if (typeof window !== 'undefined' && window.localStorage) {
       try {
@@ -541,10 +549,19 @@ export async function fetchArtifactBytes(
         // Ignore
       }
     }
+    const preloadedBin = getPreloadedBinary(cleanCid) || getPreloadedBinary(cid);
+    if (preloadedBin) {
+      try {
+        return base64ToUint8Array(preloadedBin);
+      } catch {
+        // Ignore
+      }
+    }
   }
 
-  // 3. Real CIDs: fetch from REAL gateways only (pinata, ipfs.io, cloudflare-ipfs, dweb.link)
+  // 3. Fetch from serverless proxy or public IPFS gateways (pinata, ipfs.io, cloudflare-ipfs, dweb.link)
   const realGateways = [
+    `/api/ipfs?cid=${cleanCid}`,
     `https://gateway.pinata.cloud/ipfs/${cleanCid}`,
     `https://ipfs.io/ipfs/${cleanCid}`,
     `https://cloudflare-ipfs.com/ipfs/${cleanCid}`,
