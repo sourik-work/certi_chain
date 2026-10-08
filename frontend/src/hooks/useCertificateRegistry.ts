@@ -14,6 +14,7 @@ import {
   getDefaultChainId,
   getReadProvider,
   checkContractExists,
+  getChainDetails,
   SUPPORTED_CHAINS,
 } from '../config';
 import { trace } from '../lib/debugTrace';
