@@ -308,13 +308,124 @@ function devIpfsPlugin(envVars: Record<string, string>): Plugin {
           }
         }
 
+        // Dev handler for /api/ipfs
+        if (req.url?.startsWith("/api/ipfs") && req.method === "GET") {
+          try {
+            const urlObj = new URL(req.url, "http://localhost:5173");
+            const cid = urlObj.searchParams.get("cid");
+            if (!cid) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "Missing CID parameter" }));
+              return;
+            }
+
+            const cleanCid = cid
+              .replace(/^https?:\/\/[^/]+\/ipfs\//, "")
+              .replace("ipfs://", "")
+              .replace(/^ipfs\//, "")
+              .split("?")[0]
+              .split("#")[0]
+              .trim();
+
+            if (localIpfsStore.has(cleanCid)) {
+              const val = localIpfsStore.get(cleanCid);
+              if (Buffer.isBuffer(val)) {
+                res.writeHead(200, { "Content-Type": "image/png" });
+                res.end(val);
+              } else {
+                res.writeHead(200, { "Content-Type": "application/json" });
+                res.end(JSON.stringify(val));
+              }
+              return;
+            }
+
+            // Check .devipfs on disk
+            const binPath = path.join(DEV_IPFS_DIR, `${cleanCid}.bin`);
+            if (fs.existsSync(binPath)) {
+              const buf = fs.readFileSync(binPath);
+              res.writeHead(200, { "Content-Type": "image/png" });
+              res.end(buf);
+              return;
+            }
+
+            const jsonPath = path.join(DEV_IPFS_DIR, `${cleanCid}.json`);
+            if (fs.existsSync(jsonPath)) {
+              const jsonBuf = fs.readFileSync(jsonPath);
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(jsonBuf);
+              return;
+            }
+
+            // Try upstream gateways
+            const pinataJwt = envVars.PINATA_JWT || process.env.PINATA_JWT;
+            const gateways = [
+              `https://gateway.pinata.cloud/ipfs/${cleanCid}`,
+              `https://cloudflare-ipfs.com/ipfs/${cleanCid}`,
+              `https://ipfs.io/ipfs/${cleanCid}`,
+              `https://dweb.link/ipfs/${cleanCid}`,
+            ];
+
+            (async () => {
+              for (const gwUrl of gateways) {
+                try {
+                  const headers: Record<string, string> = {};
+                  if (pinataJwt && gwUrl.includes("pinata")) {
+                    headers["Authorization"] = `Bearer ${pinataJwt.trim()}`;
+                  }
+                  const ctrl = new AbortController();
+                  const tid = setTimeout(() => ctrl.abort(), 4000);
+                  const upstream = await fetch(gwUrl, { headers, signal: ctrl.signal });
+                  clearTimeout(tid);
+                  if (upstream.ok) {
+                    const cType = upstream.headers.get("content-type") || "application/octet-stream";
+                    const arrayBuf = await upstream.arrayBuffer();
+                    const buf = Buffer.from(arrayBuf);
+                    localIpfsStore.set(cleanCid, buf);
+                    res.writeHead(200, { "Content-Type": cType });
+                    res.end(buf);
+                    return;
+                  }
+                } catch {}
+              }
+              res.writeHead(404, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: `CID ${cleanCid} not found across gateways.` }));
+            })();
+            return;
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : "IPFS proxy failed";
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: msg }));
+            return;
+          }
+        }
+
         // Mock gateway resolution in dev for simulated CIDs
         if (req.url?.startsWith("/ipfs/") || req.url?.includes("/ipfs/Qm")) {
           const cid = req.url.split("/ipfs/")[1]?.split("?")[0];
-          if (cid && localIpfsStore.has(cid)) {
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(localIpfsStore.get(cid)));
-            return;
+          if (cid) {
+            if (localIpfsStore.has(cid)) {
+              const val = localIpfsStore.get(cid);
+              if (Buffer.isBuffer(val)) {
+                res.writeHead(200, { "Content-Type": "image/png" });
+                res.end(val);
+              } else {
+                res.writeHead(200, { "Content-Type": "application/json" });
+                res.end(JSON.stringify(val));
+              }
+              return;
+            }
+            const binPath = path.join(DEV_IPFS_DIR, `${cid}.bin`);
+            if (fs.existsSync(binPath)) {
+              res.writeHead(200, { "Content-Type": "image/png" });
+              res.end(fs.readFileSync(binPath));
+              return;
+            }
+            const jsonPath = path.join(DEV_IPFS_DIR, `${cid}.json`);
+            if (fs.existsSync(jsonPath)) {
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(fs.readFileSync(jsonPath));
+              return;
+            }
           }
         }
 

@@ -17,7 +17,7 @@
 
 import { fetchMetadataFromIpfs, fetchArtifactBytes } from './pinata';
 import { computeProofHash } from './hash';
-import { sha256Bytes, uint8ArrayToDataUrl, sniffImageMime } from './bytes';
+import { sha256Bytes, uint8ArrayToDataUrl, sniffImageMime, base64ToUint8Array } from './bytes';
 import {
   OnChainCertificate,
   CertificateMetadata,
@@ -28,6 +28,9 @@ import { TemplateSpec } from './template/types';
 import { validateTemplateSpec } from './template/schema';
 import { computeTemplateSha256 } from './template/pin';
 import { getTemplateByCidOrSha256 } from './template/store';
+import { getSavedCustomTemplates } from './savedTemplatesStore';
+import { renderCustomCertificateCanvas } from './renderCertificate';
+import { CertificateTemplate } from '../types/customTemplate';
 import { trace } from './debugTrace';
 
 export interface VerifyParams {
@@ -298,9 +301,29 @@ export async function verifyCertificateIntegrity({
     let renderedHashMatch: boolean | undefined = true;
     let baseHashMatch: boolean | undefined = true;
 
+    // Look for a local saved template matching the issued templateHash
+    let matchedTemplate: CertificateTemplate | null = null;
+    try {
+      const savedTemplates = getSavedCustomTemplates();
+      matchedTemplate =
+        savedTemplates.find(
+          (t) =>
+            t.template.templateHash.toLowerCase() === metadata.custom?.templateHash.toLowerCase() ||
+            (metadata.custom?.templateCid && t.id === metadata.custom.templateCid)
+        )?.template || null;
+    } catch {
+      // Ignore
+    }
+
     // Verify templateHash if templateCid is provided
     if (metadata.custom.templateCid && metadata.custom.templateHash) {
-      const bytes = await fetchArtifactBytes(metadata.custom.templateCid, undefined);
+      let bytes = await fetchArtifactBytes(metadata.custom.templateCid, undefined);
+      if (!bytes && matchedTemplate?.previewDataUrl) {
+        try {
+          bytes = base64ToUint8Array(matchedTemplate.previewDataUrl);
+        } catch {}
+      }
+
       if (!bytes) {
         templateValid = 'unverifiable';
         templateHashMatch = undefined;
@@ -314,7 +337,20 @@ export async function verifyCertificateIntegrity({
 
     // Verify renderedHash if renderedCid is provided
     if (metadata.custom.renderedCid && metadata.custom.renderedHash) {
-      const bytes = await fetchArtifactBytes(metadata.custom.renderedCid, undefined);
+      let bytes = await fetchArtifactBytes(metadata.custom.renderedCid, undefined);
+      if (!bytes && matchedTemplate && metadata.custom.values) {
+        try {
+          const renderRes = await renderCustomCertificateCanvas({
+            template: matchedTemplate,
+            values: metadata.custom.values,
+            certId: computedHash,
+          });
+          if (renderRes.renderedHash.toLowerCase() === metadata.custom.renderedHash.toLowerCase()) {
+            bytes = base64ToUint8Array(renderRes.pngDataUrl);
+          }
+        } catch {}
+      }
+
       if (!bytes) {
         renderedValid = 'unverifiable';
         renderedHashMatch = undefined;
@@ -331,7 +367,13 @@ export async function verifyCertificateIntegrity({
 
     // Verify baseHash if baseCid is provided
     if (metadata.custom.baseCid && metadata.custom.baseHash) {
-      const bytes = await fetchArtifactBytes(metadata.custom.baseCid, undefined);
+      let bytes = await fetchArtifactBytes(metadata.custom.baseCid, undefined);
+      if (!bytes && matchedTemplate?.cleanedBaseDataUrl) {
+        try {
+          bytes = base64ToUint8Array(matchedTemplate.cleanedBaseDataUrl);
+        } catch {}
+      }
+
       if (!bytes) {
         baseValid = 'unverifiable';
         baseHashMatch = undefined;

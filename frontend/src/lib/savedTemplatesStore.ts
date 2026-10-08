@@ -20,25 +20,41 @@ export interface SavedCustomTemplate {
 }
 
 const STORAGE_KEY = 'certichain_saved_custom_templates';
+const inMemorySavedTemplates = new Map<string, SavedCustomTemplate>();
 
 /**
  * Retrieve all saved custom templates from storage, sorted by most recently updated first.
  */
 export function getSavedCustomTemplates(): SavedCustomTemplate[] {
-  if (typeof window === 'undefined' || !window.localStorage) {
-    return [];
+  let list: SavedCustomTemplate[] = [];
+
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as SavedCustomTemplate[];
+        if (Array.isArray(parsed)) list = parsed;
+      }
+    } catch (err) {
+      console.warn('Failed to parse saved templates from localStorage:', err);
+    }
   }
 
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const list = JSON.parse(raw) as SavedCustomTemplate[];
-    if (!Array.isArray(list)) return [];
-    return list.sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime());
-  } catch (err) {
-    console.warn('Failed to parse saved templates from localStorage:', err);
-    return [];
-  }
+  // Enrich items with in-memory full image dataUrls if available
+  return list.map((item) => {
+    const mem = inMemorySavedTemplates.get(item.id) || (item.template?.templateHash ? inMemorySavedTemplates.get(item.template.templateHash) : null);
+    if (mem && mem.template) {
+      return {
+        ...item,
+        template: {
+          ...item.template,
+          previewDataUrl: mem.template.previewDataUrl || item.template.previewDataUrl,
+          cleanedBaseDataUrl: mem.template.cleanedBaseDataUrl || item.template.cleanedBaseDataUrl,
+        },
+      };
+    }
+    return item;
+  }).sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime());
 }
 
 /**
@@ -102,10 +118,16 @@ export function saveSavedCustomTemplate(
     existing.unshift(item);
   }
 
+  // Preserve in memory
+  inMemorySavedTemplates.set(id, item);
+  if (template.templateHash) {
+    inMemorySavedTemplates.set(template.templateHash, item);
+  }
+
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(existing));
   } catch (err) {
-    // If quota exceeded due to large base64 images, store a compact version
+    // If quota exceeded due to large base64 images, store a compact version in localStorage while keeping full in memory
     console.warn('LocalStorage save failed, attempting compact storage:', err);
     try {
       const compactList = existing.map((t) => ({
@@ -129,9 +151,17 @@ export function saveSavedCustomTemplate(
  * Delete a saved custom template by ID.
  */
 export function deleteSavedCustomTemplate(id: string): void {
+  inMemorySavedTemplates.delete(id);
   if (typeof window === 'undefined' || !window.localStorage) return;
   const existing = getSavedCustomTemplates();
-  const filtered = existing.filter((t) => t.id !== id && t.template.templateHash !== id);
+  const filtered = existing.filter((t) => {
+    if (t.id === id || t.template.templateHash === id) {
+      inMemorySavedTemplates.delete(t.id);
+      inMemorySavedTemplates.delete(t.template.templateHash);
+      return false;
+    }
+    return true;
+  });
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
   } catch (err) {
@@ -149,6 +179,11 @@ export function renameSavedCustomTemplate(id: string, newTitle: string): void {
   if (target) {
     target.title = newTitle.trim() || target.title;
     target.updatedAt = new Date().toISOString();
+    const mem = inMemorySavedTemplates.get(id) || (target.template?.templateHash ? inMemorySavedTemplates.get(target.template.templateHash) : null);
+    if (mem) {
+      mem.title = target.title;
+      mem.updatedAt = target.updatedAt;
+    }
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(existing));
     } catch (err) {

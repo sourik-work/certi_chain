@@ -19,11 +19,10 @@ export const SUPPORTED_CHAINS: Record<number, ChainDetails> = {
     chainId: 11155111,
     name: 'Sepolia Testnet',
     rpcUrls: [
-      'https://1rpc.io/sepolia',
-      'https://sepolia.drpc.org',
       'https://ethereum-sepolia-rpc.publicnode.com',
       'https://sepolia.gateway.tenderly.co',
-      'https://rpc.sepolia.org',
+      'https://gateway.tenderly.co/public/sepolia',
+      'https://rpc.sepolia.ethpandaops.io',
     ],
     defaultRegistryAddress: '0xeCBA3CDA5f34859744ACe79B7BA79B71cC29580D',
     blockExplorerUrl: 'https://sepolia.etherscan.io',
@@ -99,15 +98,20 @@ export function getReadProvider(chainId?: number | null): ethers.JsonRpcProvider
     return new ethers.JsonRpcProvider(CONFIG.rpcUrl);
   }
 
-  // Use primary RPC URL
-  return new ethers.JsonRpcProvider(chain.rpcUrls[0], {
-    chainId: chain.chainId,
-    name: chain.name,
-  });
+  // Use primary RPC URL with static network to eliminate extra handshake roundtrips
+  return new ethers.JsonRpcProvider(
+    chain.rpcUrls[0],
+    {
+      chainId: chain.chainId,
+      name: chain.name,
+    },
+    { staticNetwork: true }
+  );
 }
 
 /**
  * Checks whether a smart contract is deployed at the registry address on the specified chain.
+ * Iterates through available fallback RPCs if network calls fail.
  */
 export async function checkContractExists(
   chainId?: number | null,
@@ -116,25 +120,63 @@ export async function checkContractExists(
   const targetId = chainId || getDefaultChainId();
   const address = getRegistryAddress(targetId);
   const chain = getChainDetails(targetId);
-  const provider = providerOverride || getReadProvider(targetId);
 
-  try {
-    const code = await provider.getCode(address);
-    const codeLength = (code.length - 2) / 2;
-    return {
-      exists: codeLength > 0,
-      codeLength,
-      address,
-      chainName: chain.name,
-    };
-  } catch (err) {
-    return {
-      exists: false,
-      codeLength: 0,
-      address,
-      chainName: chain.name,
-    };
+  // 1. If providerOverride given, try it first
+  if (providerOverride) {
+    try {
+      const code = await Promise.race([
+        providerOverride.getCode(address),
+        new Promise<string>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000)),
+      ]);
+      const codeLength = (code.length - 2) / 2;
+      if (codeLength > 0) {
+        return {
+          exists: true,
+          codeLength,
+          address,
+          chainName: chain.name,
+        };
+      }
+    } catch {
+      // Continue to public RPC fallbacks
+    }
   }
+
+  // 2. Iterate through chain RPC URLs
+  for (const rpcUrl of chain.rpcUrls) {
+    try {
+      const provider = new ethers.JsonRpcProvider(
+        rpcUrl,
+        {
+          chainId: chain.chainId,
+          name: chain.name,
+        },
+        { staticNetwork: true }
+      );
+      const code = await Promise.race([
+        provider.getCode(address),
+        new Promise<string>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3500)),
+      ]);
+      const codeLength = (code.length - 2) / 2;
+      if (codeLength > 0) {
+        return {
+          exists: true,
+          codeLength,
+          address,
+          chainName: chain.name,
+        };
+      }
+    } catch {
+      // Try next RPC url
+    }
+  }
+
+  return {
+    exists: false,
+    codeLength: 0,
+    address,
+    chainName: chain.name,
+  };
 }
 
 /**

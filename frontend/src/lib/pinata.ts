@@ -10,6 +10,7 @@ import { CertificateMetadata } from '../types/certificate';
 import { createPinError, PinError } from './pinErrors';
 import { base64ToUint8Array, sha256Bytes } from './bytes';
 import { getPreloadedMetadata, getPreloadedBinary } from './preloadedIpfs';
+import { getSavedCustomTemplates } from './savedTemplatesStore';
 
 export interface PinataPinResult {
   readonly ipfsHash: string; // CID
@@ -31,12 +32,14 @@ export interface PinBinaryOptions {
 
 // In-session cache for idempotent pinning (hash -> CID)
 const sessionBinaryPinCache = new Map<string, string>();
+const sessionBinaryContentCache = new Map<string, Uint8Array>();
 
 /**
  * Resets the session pinning cache (for tests or explicit new sessions).
  */
 export function clearSessionBinaryPinCache(): void {
   sessionBinaryPinCache.clear();
+  sessionBinaryContentCache.clear();
 }
 
 /**
@@ -196,6 +199,16 @@ export async function pinBinaryToIpfs(options: PinBinaryOptions): Promise<Pinata
 
       // Verify upload hash integrity (simulated or fetched)
       sessionBinaryPinCache.set(localHash, ipfsHash);
+      sessionBinaryContentCache.set(ipfsHash, fileBytes);
+      sessionBinaryContentCache.set(localHash, fileBytes);
+      const cleanIpfsHash = ipfsHash
+        .replace(/^https?:\/\/[^/]+\/ipfs\//, '')
+        .replace('ipfs://', '')
+        .replace(/^ipfs\//, '')
+        .split('?')[0]
+        .split('#')[0]
+        .trim();
+      sessionBinaryContentCache.set(cleanIpfsHash, fileBytes);
 
       if (typeof window !== 'undefined' && window.localStorage) {
         try {
@@ -218,6 +231,18 @@ export async function pinBinaryToIpfs(options: PinBinaryOptions): Promise<Pinata
           console.warn(`[pinata] Binary pin encountered ${err.code}, using local dev simulation CID.`);
           const simulatedCid = `QmSim${localHash.slice(2, 42)}`;
           sessionBinaryPinCache.set(localHash, simulatedCid);
+          sessionBinaryContentCache.set(simulatedCid, fileBytes);
+          sessionBinaryContentCache.set(localHash, fileBytes);
+
+          if (typeof window !== 'undefined' && window.localStorage) {
+            try {
+              window.localStorage.setItem(`certichain_ipfs_${simulatedCid}`, fileBase64);
+              window.localStorage.setItem(simulatedCid, fileBase64);
+            } catch {
+              // ignore quota
+            }
+          }
+
           return {
             ipfsHash: simulatedCid,
             pinSize: fileBytes.length,
@@ -535,7 +560,13 @@ export async function fetchArtifactBytes(
     .split('#')[0]
     .trim();
 
-  // 2. Simulated CIDs (QmSim...) branch: localStorage cache and preloaded binaries are authoritative
+  // 2. In-memory session content cache lookup (instant 0ms resolution for in-session issued artifacts)
+  const memCached = sessionBinaryContentCache.get(cleanCid) || sessionBinaryContentCache.get(cid);
+  if (memCached && memCached.length > 0) {
+    return memCached;
+  }
+
+  // 2.5. Simulated CIDs (QmSim...) branch: localStorage cache and preloaded binaries are authoritative
   if (cleanCid.startsWith('QmSim')) {
     if (typeof window !== 'undefined' && window.localStorage) {
       try {
@@ -559,31 +590,130 @@ export async function fetchArtifactBytes(
     }
   }
 
-  // 3. Fetch from serverless proxy or public IPFS gateways (pinata, ipfs.io, cloudflare-ipfs, dweb.link)
+  // 3. Real CIDs: Fetch from local dev server proxy (/api/ipfs?cid=... or /ipfs/...) or public IPFS gateways (concurrently)
   const realGateways = [
     `/api/ipfs?cid=${cleanCid}`,
-    `https://gateway.pinata.cloud/ipfs/${cleanCid}`,
-    `https://ipfs.io/ipfs/${cleanCid}`,
+    constructGatewayUrl(cleanCid, false),
     `https://cloudflare-ipfs.com/ipfs/${cleanCid}`,
+    `https://ipfs.io/ipfs/${cleanCid}`,
+    constructGatewayUrl(cleanCid, true),
     `https://dweb.link/ipfs/${cleanCid}`,
+    `https://w3s.link/ipfs/${cleanCid}`,
   ];
 
-  for (const url of realGateways) {
+  const fetchOneGateway = async (url: string): Promise<Uint8Array> => {
+    const ctrl = new AbortController();
+    const tid = setTimeout(() => ctrl.abort(), 2500);
     try {
-      const ctrl = new AbortController();
-      const tid = setTimeout(() => ctrl.abort(), 4000);
       const res = await fetch(url, { signal: ctrl.signal });
       clearTimeout(tid);
       if (res.ok) {
         const buf = await res.arrayBuffer();
-        return new Uint8Array(buf);
+        const bytes = new Uint8Array(buf);
+        if (bytes.length > 0) return bytes;
       }
     } catch {
-      // Try next gateway
+      clearTimeout(tid);
+    }
+    throw new Error('Gateway unreachable');
+  };
+
+  try {
+    const gatewayBytes = await Promise.any(realGateways.map(fetchOneGateway));
+    if (gatewayBytes && gatewayBytes.length > 0) {
+      return gatewayBytes;
+    }
+  } catch {
+    // Gateways failed or offline — fall through to caches
+  }
+
+  // 4. Fallback: Preloaded catalog lookup
+  const preloadedBin = getPreloadedBinary(cleanCid) || getPreloadedBinary(cid);
+  if (preloadedBin) {
+    try {
+      return base64ToUint8Array(preloadedBin);
+    } catch {
+      // Continue
     }
   }
 
-  // 4. Return null if unreachable
+  // 5. Fallback: Check saved templates library in storage
+  try {
+    const savedTemplates = getSavedCustomTemplates();
+    for (const saved of savedTemplates) {
+      if (
+        saved.template.templateHash === cleanCid ||
+        saved.template.baseHash === cleanCid ||
+        saved.id === cleanCid
+      ) {
+        const targetDataUrl =
+          (saved.template.templateHash === cleanCid ? saved.template.previewDataUrl : undefined) ||
+          (saved.template.baseHash === cleanCid ? saved.template.cleanedBaseDataUrl : undefined) ||
+          saved.template.previewDataUrl;
+        if (targetDataUrl) {
+          return base64ToUint8Array(targetDataUrl);
+        }
+      }
+    }
+  } catch {
+    // Ignore
+  }
+
+  // 6. Fallback: Check browser local cache (for local dev, offline resilience, or newly issued records)
+  // Mathematical integrity is guaranteed since verifyCertificateIntegrity always verifies sha256(bytes) against on-chain proofHash.
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const localDirect =
+        window.localStorage.getItem(`certichain_ipfs_${cleanCid}`) ||
+        window.localStorage.getItem(cleanCid) ||
+        window.localStorage.getItem(`certichain_ipfs_${cid}`);
+      if (localDirect) {
+        return base64ToUint8Array(localDirect);
+      }
+
+      // Check cached records across networks
+      for (const chain of [31337, 11155111, CONFIG.targetChainId]) {
+        const recordsRaw = window.localStorage.getItem(`certichain_records_${chain}`);
+        if (recordsRaw) {
+          try {
+            const records = JSON.parse(recordsRaw);
+            const found = records.find(
+              (r: any) =>
+                r.metadataUrl?.includes(cleanCid) ||
+                r.ipfsHash === cleanCid ||
+                r.metadata?.custom?.templateCid === cleanCid ||
+                r.metadata?.custom?.renderedCid === cleanCid ||
+                r.metadata?.custom?.baseCid === cleanCid ||
+                r.metadata?.custom?.templateHash === cleanCid ||
+                r.metadata?.custom?.renderedHash === cleanCid ||
+                r.metadata?.custom?.baseHash === cleanCid
+            );
+            if (found) {
+              const matchedDataUrl =
+                (found.metadata?.custom?.templateCid === cleanCid || found.metadata?.custom?.templateHash === cleanCid
+                  ? found.templateDataUrl
+                  : undefined) ||
+                (found.metadata?.custom?.renderedCid === cleanCid || found.metadata?.custom?.renderedHash === cleanCid
+                  ? found.renderedDataUrl
+                  : undefined) ||
+                (found.metadata?.custom?.baseCid === cleanCid || found.metadata?.custom?.baseHash === cleanCid
+                  ? found.baseDataUrl
+                  : undefined);
+              if (matchedDataUrl) {
+                return base64ToUint8Array(matchedDataUrl);
+              }
+            }
+          } catch {
+            // continue
+          }
+        }
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }
+
+  // 7. Return null if unreachable
   return null;
 }
 

@@ -355,11 +355,7 @@ export const IssuerDashboard: React.FC<IssuerDashboardProps> = ({ onNavigateToVe
       setStandardTxStep('mining');
       setStandardConfirmations(1);
 
-      await result.wait(1);
-
-      const computedCertId = ethers.keccak256(
-        ethers.solidityPacked(['bytes32', 'address'], [proofHash, account])
-      );
+      const computedCertId = proofHash;
 
       setStandardIssuedCertId(computedCertId);
       setStandardTxStep('confirmed');
@@ -367,7 +363,7 @@ export const IssuerDashboard: React.FC<IssuerDashboardProps> = ({ onNavigateToVe
 
       if (typeof window !== 'undefined' && window.localStorage) {
         try {
-          const recordsKey = `certichain_records_${activeChainId}`;
+          const recordsKey = `certichain_records_${activeChain}`;
           const existingRecords = JSON.parse(window.localStorage.getItem(recordsKey) || '[]');
           const newRecord = {
             certId: computedCertId,
@@ -570,7 +566,7 @@ export const IssuerDashboard: React.FC<IssuerDashboardProps> = ({ onNavigateToVe
 
       if (typeof window !== 'undefined' && window.localStorage) {
         try {
-          const recordsKey = `certichain_records_${activeChainId}`;
+          const recordsKey = `certichain_records_${activeChain}`;
           const existingRecords = JSON.parse(window.localStorage.getItem(recordsKey) || '[]');
           const newRecord = {
             certId: computedCertId,
@@ -581,7 +577,31 @@ export const IssuerDashboard: React.FC<IssuerDashboardProps> = ({ onNavigateToVe
             issuedAt: Math.floor(Date.now() / 1000),
             isRevoked: false,
             metadata: metadataToPin,
+            templateDataUrl: customState.template?.previewDataUrl,
+            renderedDataUrl: renderRes?.pngDataUrl,
+            baseDataUrl: customState.template?.cleanedBaseDataUrl,
           };
+
+          // Also cache binary artifacts under their CIDs for instant local verification
+          if (templateCid && customState.template?.previewDataUrl) {
+            try {
+              window.localStorage.setItem(`certichain_ipfs_${templateCid}`, customState.template.previewDataUrl);
+              window.localStorage.setItem(templateCid, customState.template.previewDataUrl);
+            } catch {}
+          }
+          if (renderedCid && renderRes?.pngDataUrl) {
+            try {
+              window.localStorage.setItem(`certichain_ipfs_${renderedCid}`, renderRes.pngDataUrl);
+              window.localStorage.setItem(renderedCid, renderRes.pngDataUrl);
+            } catch {}
+          }
+          if (baseCid && customState.template?.cleanedBaseDataUrl) {
+            try {
+              window.localStorage.setItem(`certichain_ipfs_${baseCid}`, customState.template.cleanedBaseDataUrl);
+              window.localStorage.setItem(baseCid, customState.template.cleanedBaseDataUrl);
+            } catch {}
+          }
+
           window.localStorage.setItem(recordsKey, JSON.stringify([newRecord, ...existingRecords]));
         } catch {
           // ignore quota

@@ -32,7 +32,7 @@ interface VerifyCertificateProps {
 }
 
 export const VerifyCertificate: React.FC<VerifyCertificateProps> = ({ initialCertId }) => {
-  const { account, chainId: walletChainId } = useWallet();
+  const { account, chainId: walletChainId, provider } = useWallet();
   const { verifyCertificate, isIssuerAuthorized, revokeCertificate, queryAllIssuedCertificates } =
     useCertificateRegistry();
   const { showToast } = useToast();
@@ -114,8 +114,9 @@ export const VerifyCertificate: React.FC<VerifyCertificateProps> = ({ initialCer
       try {
         trace('route', { certId: normalized.certId, targetChainId, registry: targetRegistry });
 
-        // Step 1: Check contract existence guard (2.3)
-        const existence = await checkContractExists(targetChainId);
+        // Step 1: Check contract existence guard with provider fallback
+        const existenceProvider = walletChainId === targetChainId && provider ? provider : undefined;
+        const existence = await checkContractExists(targetChainId, existenceProvider);
         const readProvider = getReadProvider(targetChainId);
         let blockNumber = 0;
         try {

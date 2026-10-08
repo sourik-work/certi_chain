@@ -22,6 +22,8 @@ dist/
 dist-ssr/
 frontend/dist/
 frontend/dist-ssr/
+.vite/
+frontend/.vite/
 
 # Coverage & Testing
 coverage/

@@ -249,7 +249,10 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
       }
 
       // Check contract existence first
-      const existence = await checkContractExists(activeChainId);
+      const existence = await checkContractExists(
+        activeChainId,
+        provider && chainId === activeChainId ? provider : undefined
+      );
       if (!existence.exists) {
         const err = new Error(
           `No registry contract found at ${existence.address} on ${existence.chainName}. The app may be configured for a different network or the chain was reset.`
@@ -285,7 +288,32 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
           revokedAt: result.revokedAt,
         };
       } catch (err: any) {
-        // If error is due to RPC reachability or call failure
+        // Fallback to secondary RPC providers before giving up
+        const chain = getChainDetails(activeChainId);
+        const targetAddress = getRegistryAddress(activeChainId);
+        for (const rpcUrl of chain.rpcUrls) {
+          try {
+            const fallbackProvider = new ethers.JsonRpcProvider(
+              rpcUrl,
+              { chainId: chain.chainId, name: chain.name },
+              { staticNetwork: true }
+            );
+            const fallbackContract = CertificateRegistry__factory.connect(targetAddress, fallbackProvider);
+            const result = await fallbackContract.verifyCertificate(cleanId);
+            return {
+              issuer: result.issuer,
+              recipient: result.recipient,
+              proofHash: result.proofHash,
+              metadataUrl: result.metadataUrl,
+              issuedAt: result.issuedAt,
+              revoked: result.revoked,
+              revokedAt: result.revokedAt,
+            };
+          } catch {
+            // continue
+          }
+        }
+
         const msg = err instanceof Error ? err.message : String(err);
         const unreachableErr = new Error(`Unable to reach the registry on ${existence.chainName}: ${msg}`);
         (unreachableErr as any).code = 'UNREACHABLE';
@@ -294,7 +322,7 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
         throw unreachableErr;
       }
     },
-    [chainId, getContractForChain]
+    [chainId, getContractForChain, provider]
   );
 
   const queryRecipientCertificates = useCallback(
@@ -323,14 +351,26 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
       }
 
       try {
-        const existence = await checkContractExists(activeChain);
+        const existence = await checkContractExists(
+          activeChain,
+          provider && chainId === activeChain ? provider : undefined
+        );
         if (!existence.exists) {
-          return [];
+          return cachedRecords;
         }
 
         const contract = getContractForChain(activeChain, false);
         const filter = contract.filters.CertificateIssued(undefined, undefined, recipientAddress);
-        const fromBlock = activeChain === 11155111 ? -5000 : 0;
+        let fromBlock = 0;
+        if (activeChain === 11155111) {
+          try {
+            const readProvider = getReadProvider(activeChain);
+            const currentBlock = await readProvider.getBlockNumber();
+            fromBlock = Math.max(0, currentBlock - 5000);
+          } catch {
+            fromBlock = 0;
+          }
+        }
         let onChainRecords: IssuedCertificateRecord[] = [];
 
         try {
@@ -364,9 +404,11 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
                   metadataUrl: onChain.metadataUrl,
                   timestamp: onChain.issuedAt,
                 });
+              } else {
+                confirmedMap.set(cached.certId.toLowerCase(), cached);
               }
             } catch {
-              // Not on-chain, omit ghost record
+              confirmedMap.set(cached.certId.toLowerCase(), cached);
             }
           }
         }
@@ -374,10 +416,10 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
         return Array.from(confirmedMap.values()).sort((a, b) => Number(b.timestamp - a.timestamp));
       } catch (err) {
         console.warn('On-chain recipient query failed:', err);
-        return [];
+        return cachedRecords;
       }
     },
-    [chainId, getContractForChain]
+    [chainId, getContractForChain, provider]
   );
 
   const queryAllIssuedCertificates = useCallback(
@@ -405,9 +447,12 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
       }
 
       try {
-        const existence = await checkContractExists(activeChain);
+        const existence = await checkContractExists(
+          activeChain,
+          provider && chainId === activeChain ? provider : undefined
+        );
         if (!existence.exists) {
-          return [];
+          return cachedRecords;
         }
 
         const contract = getContractForChain(activeChain, false);
@@ -415,7 +460,16 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
           ? contract.filters.CertificateIssued(undefined, issuerAddress, undefined)
           : contract.filters.CertificateIssued();
 
-        const fromBlock = activeChain === 11155111 ? -5000 : 0;
+        let fromBlock = 0;
+        if (activeChain === 11155111) {
+          try {
+            const readProvider = getReadProvider(activeChain);
+            const currentBlock = await readProvider.getBlockNumber();
+            fromBlock = Math.max(0, currentBlock - 5000);
+          } catch {
+            fromBlock = 0;
+          }
+        }
         let onChainRecords: IssuedCertificateRecord[] = [];
 
         try {
@@ -449,20 +503,40 @@ export function useCertificateRegistry(): UseCertificateRegistryReturn {
                   metadataUrl: onChain.metadataUrl,
                   timestamp: onChain.issuedAt,
                 });
+              } else {
+                confirmedMap.set(cached.certId.toLowerCase(), cached);
               }
             } catch {
-              // Not on-chain, omit ghost record
+              confirmedMap.set(cached.certId.toLowerCase(), cached);
             }
           }
         }
 
-        return Array.from(confirmedMap.values()).sort((a, b) => Number(b.timestamp - a.timestamp));
+        const sortedRecords = Array.from(confirmedMap.values()).sort((a, b) => Number(b.timestamp - a.timestamp));
+
+        // Sync fresh on-chain records back to localStorage cache to purge stale empty entries
+        if (typeof window !== 'undefined' && window.localStorage && sortedRecords.length > 0) {
+          try {
+            const serialized = JSON.stringify(
+              sortedRecords.map((r) => ({
+                ...r,
+                timestamp: r.timestamp.toString(),
+              }))
+            );
+            window.localStorage.setItem(key, serialized);
+            window.localStorage.setItem(`${key}_last_sync`, Date.now().toString());
+          } catch {
+            // ignore localStorage quota
+          }
+        }
+
+        return sortedRecords;
       } catch (err) {
         console.warn('On-chain event query failed:', err);
-        return [];
+        return cachedRecords;
       }
     },
-    [chainId, getContractForChain]
+    [chainId, getContractForChain, provider]
   );
 
   return {
